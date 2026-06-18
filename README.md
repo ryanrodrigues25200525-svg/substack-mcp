@@ -2,6 +2,8 @@
 
 An [MCP](https://modelcontextprotocol.io) server for reading Substack — publications, posts, comments, author profiles, recommendations, and your Notes feed — using your own reader session, no official API required.
 
+For use with Claude, Codex, and other MCP-compatible coding agents.
+
 It's read-only 🔒: nothing it does can post, like, comment, or change your account state.
 
 ## 🛠️ Tools
