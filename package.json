@@ -1,0 +1,20 @@
+{
+  "name": "substack-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for reading Substack publications, posts, comments, and notes via a reader session token",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node test/run.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  }
+}
