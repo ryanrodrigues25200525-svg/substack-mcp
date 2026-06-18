@@ -26,7 +26,8 @@ Substack doesn't expose a public API for these reads. Instead, this server repla
 
 - You need an active Substack account and a valid session token.
 - The token expires periodically — when requests start failing with an auth error, re-extract it (see below).
-- This is unofficial and not endorsed by Substack. Use at your own discretion and in line with Substack's Terms of Service.
+
+This is an unofficial library and is not affiliated with or endorsed by Substack. It only accesses content you're already entitled to (your own subscriptions, public posts, and your own account data) and doesn't bypass paywalls or rate limits. Be mindful of [Substack's Terms of Use](https://substack.com/tos) when using it.
 
 ## Setup
 
@@ -74,4 +75,4 @@ The test suite makes real requests against live publications, so it needs a vali
 
 ## License
 
-MIT
+[MIT](LICENSE)
