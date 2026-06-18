@@ -1,10 +1,10 @@
-# substack-mcp
+# substack-mcp 📰
 
 An [MCP](https://modelcontextprotocol.io) server for reading Substack — publications, posts, comments, author profiles, recommendations, and your Notes feed — using your own reader session, no official API required.
 
-It's read-only: nothing it does can post, like, comment, or change your account state.
+It's read-only 🔒: nothing it does can post, like, comment, or change your account state.
 
-## Tools
+## 🛠️ Tools
 
 | Tool | Description |
 |---|---|
@@ -20,16 +20,16 @@ It's read-only: nothing it does can post, like, comment, or change your account 
 | `get_recommendations` | List publications a given publication recommends to its readers |
 | `get_notes_feed` | List recent items from your Notes home feed |
 
-## How it works
+## ⚙️ How it works
 
 Substack doesn't expose a public API for these reads. Instead, this server replays the same `/api/v1/*` requests your browser makes when you're logged in, authenticated with your `substack.sid` session cookie. That means:
 
 - You need an active Substack account and a valid session token.
 - The token expires periodically — when requests start failing with an auth error, re-extract it (see below).
 
-This is an unofficial library and is not affiliated with or endorsed by Substack. It only accesses content you're already entitled to (your own subscriptions, public posts, and your own account data) and doesn't bypass paywalls or rate limits. Be mindful of [Substack's Terms of Use](https://substack.com/tos) when using it.
+⚠️ This is an unofficial library and is not affiliated with or endorsed by Substack. It only accesses content you're already entitled to (your own subscriptions, public posts, and your own account data) and doesn't bypass paywalls or rate limits. Be mindful of [Substack's Terms of Use](https://substack.com/tos) when using it.
 
-## Setup
+## 🚀 Setup
 
 ```bash
 git clone https://github.com/ryanrodrigues25200525-svg/substack-mcp.git
@@ -38,13 +38,13 @@ npm install
 npm run build
 ```
 
-### Get your session token
+### 🔑 Get your session token
 
 1. Log into Substack in your browser.
 2. Open DevTools → Application/Storage → Cookies → `substack.com`.
 3. Copy the value of the `substack.sid` cookie.
 
-### Configure your MCP client
+### 🔌 Configure your MCP client
 
 Add to your MCP client's config (e.g. Claude Code's `~/.claude.json`, under `mcpServers`):
 
@@ -62,9 +62,9 @@ Add to your MCP client's config (e.g. Claude Code's `~/.claude.json`, under `mcp
 }
 ```
 
-**Never commit your token.** Keep it in your local MCP client config only, not in this repo or in version control.
+🚫 **Never commit your token.** Keep it in your local MCP client config only, not in this repo or in version control.
 
-## Development
+## 🧪 Development
 
 ```bash
 npm run build               # compile TypeScript
@@ -73,6 +73,6 @@ SUBSTACK_SESSION_TOKEN=xxx npm test   # run the integration test suite against l
 
 The test suite makes real requests against live publications, so it needs a valid `SUBSTACK_SESSION_TOKEN` and is subject to Substack's rate limits.
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
