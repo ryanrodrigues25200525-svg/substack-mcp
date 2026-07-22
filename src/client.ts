@@ -3,6 +3,10 @@ const BASE_HEADERS = {
   Accept: "application/json",
 };
 
+// Marker for errors that must never be retried — the request was refused on trust grounds,
+// so retrying it is pointless and just repeats the attempt.
+const UNTRUSTED_PREFIX = "Refusing:";
+
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 3;
 
@@ -63,15 +67,55 @@ function slimFullPost(p: any) {
 
 export class SubstackClient {
   private sessionToken: string;
+  private customDomainsPromise: Promise<Set<string>> | null = null;
 
   constructor(sessionToken: string) {
     this.sessionToken = sessionToken;
+  }
+
+  // The set of non-substack.com hosts we're willing to send the session cookie to:
+  // the custom domains of publications this reader is actually subscribed to.
+  // Fetched once, lazily; failures degrade to "trust nothing extra" rather than throwing.
+  private customDomains(): Promise<Set<string>> {
+    if (!this.customDomainsPromise) {
+      this.customDomainsPromise = this.listSubscriptions()
+        .then((subs: any) => {
+          const set = new Set<string>();
+          for (const pub of subs?.publications ?? []) {
+            if (pub?.custom_domain) set.add(String(pub.custom_domain).toLowerCase());
+          }
+          return set;
+        })
+        .catch(() => new Set<string>());
+    }
+    return this.customDomainsPromise;
+  }
+
+  // Only attach the session cookie to hosts we trust. substack.sid is a full account
+  // session, and this server ingests untrusted text (post bodies, comments) that could
+  // steer a tool call at an attacker-chosen domain — so a caller-supplied host is not
+  // sufficient authority to receive it.
+  private async isTrustedHost(hostname: string): Promise<boolean> {
+    const host = hostname.toLowerCase();
+    if (host === "substack.com" || host.endsWith(".substack.com")) return true;
+    return (await this.customDomains()).has(host);
+  }
+
+  private async authHeaders(hostname: string): Promise<Record<string, string>> {
+    return (await this.isTrustedHost(hostname))
+      ? { ...BASE_HEADERS, Cookie: `substack.sid=${this.sessionToken}` }
+      : { ...BASE_HEADERS };
   }
 
   private async request(baseUrl: string, path: string, params: Record<string, string | number> = {}) {
     const url = new URL(`${normalizeDomain(baseUrl)}${path}`);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
 
+    if (url.protocol !== "https:") {
+      throw new Error(`${UNTRUSTED_PREFIX} non-HTTPS request to ${url.host}`);
+    }
+
+    const headers = await this.authHeaders(url.hostname);
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -80,10 +124,18 @@ export class SubstackClient {
 
       try {
         const res = await fetch(url, {
-          headers: { ...BASE_HEADERS, Cookie: `substack.sid=${this.sessionToken}` },
+          headers,
+          redirect: "follow",
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
+
+        // A cross-host redirect would re-send our headers to the new origin; make sure
+        // wherever we actually landed is still a host we'd have trusted up front.
+        const finalHost = new URL(res.url).hostname;
+        if ("Cookie" in headers && !(await this.isTrustedHost(finalHost))) {
+          throw new Error(`${UNTRUSTED_PREFIX} cross-host redirect to ${finalHost}`);
+        }
 
         if (res.status === 401 || res.status === 403) {
           throw new Error("Authentication failed — session token is likely expired. Re-extract substack.sid from the browser.");
@@ -112,7 +164,10 @@ export class SubstackClient {
         }
         // Auth errors and generic thrown Errors from above already escaped via throw;
         // only network-level failures (fetch rejecting) land here for retry.
-        if (attempt < MAX_RETRIES && !(err instanceof Error && err.message.startsWith("Authentication failed"))) {
+        const fatal =
+          err instanceof Error &&
+          (err.message.startsWith("Authentication failed") || err.message.startsWith(UNTRUSTED_PREFIX));
+        if (attempt < MAX_RETRIES && !fatal) {
           await sleep(500 * Math.pow(2, attempt));
           continue;
         }
@@ -132,10 +187,16 @@ export class SubstackClient {
       // a by-id endpoint (with a 301 to its custom domain, if any) that resolves the real slug.
       const handleMatch = url.match(/@([^/]+)/);
       if (!handleMatch) throw new Error(`Could not extract a publication handle from URL: ${url}`);
-      const guessDomain = `${handleMatch[1]}.substack.com`;
+      // Constrain the handle to a real subdomain label — otherwise something like
+      // "@x?y=" or "@x@evil.com" reinterprets the host once parsed as a URL.
+      const handle = handleMatch[1];
+      if (!/^[A-Za-z0-9-]+$/.test(handle)) {
+        throw new Error(`Invalid publication handle in URL: ${handle}`);
+      }
+      const guessDomain = `${handle}.substack.com`;
 
       const res = await fetch(`https://${guessDomain}/api/v1/posts/by-id/${idMatch[1]}`, {
-        headers: { ...BASE_HEADERS, Cookie: `substack.sid=${this.sessionToken}` },
+        headers: await this.authHeaders(guessDomain),
       });
       if (!res.ok) throw new Error(`Could not resolve URL ${url}: ${res.status}`);
       const body: any = await res.json();
