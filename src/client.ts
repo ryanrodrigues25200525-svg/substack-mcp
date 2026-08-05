@@ -130,12 +130,9 @@ export class SubstackClient {
         });
         clearTimeout(timeoutId);
 
-        // A cross-host redirect would re-send our headers to the new origin; make sure
-        // wherever we actually landed is still a host we'd have trusted up front.
-        const finalHost = new URL(res.url).hostname;
-        if ("Cookie" in headers && !(await this.isTrustedHost(finalHost))) {
-          throw new Error(`${UNTRUSTED_PREFIX} cross-host redirect to ${finalHost}`);
-        }
+        // ponytail: no cross-host redirect check — fetch strips Cookie on cross-origin
+        // redirects per spec, and publications with a custom domain 301 their API off
+        // <pub>.substack.com, so refusing the redirect broke them.
 
         if (res.status === 401 || res.status === 403) {
           throw new Error("Authentication failed — session token is likely expired. Re-extract substack.sid from the browser.");

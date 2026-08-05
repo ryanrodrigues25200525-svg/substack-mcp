@@ -64,13 +64,13 @@ await test("session cookie is NOT sent to an arbitrary domain", async () => {
   );
 });
 
-await test("a redirect to an untrusted host is refused", async () => {
+// Publications with a custom domain 301 their API off <pub>.substack.com. fetch drops
+// the Cookie header on a cross-origin redirect, so following it leaks nothing.
+await test("a publication that redirects to its custom domain still resolves", async () => {
   const seen = [];
-  stubFetch(seen, { redirectTo: "https://evil-exfil.example.com/api/v1/archive" });
-  await assert.rejects(
-    () => new SubstackClient("SECRET").listPublished("lenny.substack.com"),
-    /Refusing:/
-  );
+  stubFetch(seen, { redirectTo: "https://www.lennysnewsletter.com/api/v1/archive" });
+  const posts = await new SubstackClient("SECRET").listPublished("lenny.substack.com");
+  assert.equal(posts.length, 1);
 });
 
 await test("plain-http domains are refused", async () => {
