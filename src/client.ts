@@ -1,3 +1,5 @@
+import { domainsForTag, getTagMap, setTags } from "./tags.js";
+
 const BASE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
   Accept: "application/json",
@@ -282,9 +284,14 @@ export class SubstackClient {
     return byId;
   }
 
-  // Search across every publication the reader is subscribed to or follows
-  async searchAllSubscriptions(query: string, limitPerPub = 10) {
-    const publications = [...(await this.discoverPublications()).values()];
+  // Search across every publication the reader is subscribed to or follows, optionally
+  // narrowed to publications carrying a given tag (see tagPublication).
+  async searchAllSubscriptions(query: string, limitPerPub = 10, tag?: string) {
+    let publications = [...(await this.discoverPublications()).values()];
+    if (tag) {
+      const tagged = await domainsForTag(tag);
+      publications = publications.filter((pub) => tagged.has(`${pub.subdomain}.substack.com`));
+    }
     const results = await mapPool(publications, 6, async (pub) => {
       const domain = `${pub.subdomain}.substack.com`;
       try {
@@ -314,24 +321,49 @@ export class SubstackClient {
   //
   // ponytail: the API returns a "more" flag but every offset/cursor/page param tried
   // against it came back with the same first page, so only that page is reachable here.
-  async getInbox(limit = 20) {
+  //
+  // The tag filter is applied after fetching, since it only ever sees the first page —
+  // a tag covering a small slice of what you read may come back thin or empty even
+  // though older matching posts exist beyond that page.
+  async getInbox(limit = 20, tag?: string) {
     const feed: any = await this.getInboxRaw(limit);
     const pubs = new Map<number, any>((feed.publications ?? []).map((p: any) => [p.id, p]));
     const posts: any[] = feed.posts ?? [];
-    return posts.map((p) => {
-      const pub = pubs.get(p.publication_id);
-      return {
-        title: p.title,
-        subtitle: p.subtitle,
-        publication: pub?.name,
-        domain: pub?.subdomain ? `${pub.subdomain}.substack.com` : undefined,
-        post_date: p.post_date,
-        audience: p.audience,
-        canonical_url: p.canonical_url,
-        wordcount: p.wordcount,
-        unread: !p.max_read_progress,
-      };
-    });
+    const tagged = tag ? await domainsForTag(tag) : null;
+    return posts
+      .map((p) => {
+        const pub = pubs.get(p.publication_id);
+        return {
+          title: p.title,
+          subtitle: p.subtitle,
+          publication: pub?.name,
+          domain: pub?.subdomain ? `${pub.subdomain}.substack.com` : undefined,
+          post_date: p.post_date,
+          audience: p.audience,
+          canonical_url: p.canonical_url,
+          wordcount: p.wordcount,
+          unread: !p.max_read_progress,
+        };
+      })
+      .filter((p) => !tagged || (p.domain && tagged.has(p.domain)));
+  }
+
+  // Replace the tag set for a publication domain (e.g. "hfbestideas.substack.com"),
+  // for use with the `tag` filter on searchAllSubscriptions and getInbox. Local to this
+  // machine — Substack has no per-publication topic field to read this from. Pass an
+  // empty array to untag.
+  tagPublication(domain: string, tags: string[]) {
+    return setTags(domain, tags);
+  }
+
+  // All tags currently in use, each with the domains carrying it.
+  async listTags(): Promise<Record<string, string[]>> {
+    const byDomain = await getTagMap();
+    const byTag: Record<string, string[]> = {};
+    for (const [domain, tags] of Object.entries(byDomain)) {
+      for (const t of tags) (byTag[t] ??= []).push(domain);
+    }
+    return byTag;
   }
 
   // Fetch comments on a post (by domain + slug). Looks up the post's internal id first,

@@ -16,12 +16,24 @@ It's read-only 🔒: nothing it does can post, like, comment, or change your acc
 | `search_posts` | Search posts within a publication |
 | `search_all_subscriptions` | Search across every publication you're subscribed to or follow |
 | `list_subscriptions` | List your subscriptions (free and paid) |
-| `get_inbox` | New posts across every publication you read, newest first, with read/unread state |
+| `get_inbox` | New posts across every publication you read, newest first, with read/unread state. Optional `tag` filter |
 | `get_post_comments` | Get a post's comments, with nested replies, by domain + slug |
 | `get_post_comments_by_url` | Same, from any post URL |
 | `get_author_profile` | Get an author's public profile (bio, social links, publications they write for) |
 | `get_recommendations` | List publications a given publication recommends to its readers |
 | `get_notes_feed` | List recent items from your Notes home feed |
+| `tag_publication` | Tag a publication by topic (e.g. `financial-research`) for use with `search_all_subscriptions`/`get_inbox`'s `tag` filter. Empty array untags |
+| `list_tags` | List every tag you've set and which publications carry each one |
+
+## 🏷️ Tagging
+
+Substack doesn't expose a topic or category field for publications — `tag_publication` is a
+local layer this server keeps for you, stored at `~/.substack-mcp/tags.json` (override with
+`SUBSTACK_MCP_TAGS_FILE`). Tag your accounts by whatever grouping you want — e.g. `financial-research`
+for the ones covering markets, something else for the rest — then pass `tag` to
+`search_all_subscriptions` or `get_inbox` to scope to just that group. Nothing here reads or
+infers a topic from Substack itself; you (or your agent, reading a few recent post titles) decide
+what a publication is about.
 
 ## ⚙️ How it works
 

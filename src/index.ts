@@ -68,12 +68,13 @@ const TOOLS = [
   },
   {
     name: "search_all_subscriptions",
-    description: "Search for posts matching a query across every publication you're subscribed to",
+    description: "Search for posts matching a query across every publication you're subscribed to or follow. Pass tag to narrow the search to publications carrying that tag (see tag_publication).",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Search text" },
         limitPerPub: { type: "number", default: 10, description: "Max results per publication" },
+        tag: { type: "string", description: "Only search publications carrying this tag" },
       },
       required: ["query"],
     },
@@ -119,11 +120,31 @@ const TOOLS = [
   },
   {
     name: "get_inbox",
-    description: "List new posts across every publication you're subscribed to or follow, newest first, with read/unread state. Wider coverage than list_subscriptions + list_published_posts per pub, and one call instead of many.",
+    description: "List new posts across every publication you're subscribed to or follow, newest first, with read/unread state. Wider coverage than list_subscriptions + list_published_posts per pub, and one call instead of many. Pass tag to narrow to publications carrying that tag (see tag_publication).",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", default: 20 } },
+      properties: {
+        limit: { type: "number", default: 20 },
+        tag: { type: "string", description: "Only include posts from publications carrying this tag" },
+      },
     },
+  },
+  {
+    name: "tag_publication",
+    description: "Tag a publication (e.g. by topic, like 'financial-research') so it can be scoped later with search_all_subscriptions/get_inbox's tag filter, or looked up with list_tags. Tags are local to this machine — Substack doesn't expose a topic field to read this from. Pass an empty tags array to untag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        domain: { type: "string", description: "Publication domain, e.g. 'hfbestideas.substack.com'" },
+        tags: { type: "array", items: { type: "string" }, description: "Tags to set, replacing any existing tags. Empty array untags." },
+      },
+      required: ["domain", "tags"],
+    },
+  },
+  {
+    name: "list_tags",
+    description: "List every tag you've set with tag_publication and which publications carry each one.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "get_notes_feed",
@@ -158,6 +179,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       get_notes_feed: [],
       get_author_profile: ["handle"],
       get_recommendations: ["domain"],
+      tag_publication: ["domain", "tags"],
+      list_tags: [],
     };
     if (name in required) {
       const missing = required[name].filter((key) => !args[key]);
@@ -184,7 +207,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = await client.getPostByUrl(args.url as string);
         break;
       case "search_all_subscriptions":
-        result = await client.searchAllSubscriptions(args.query as string, args.limitPerPub as number);
+        result = await client.searchAllSubscriptions(args.query as string, args.limitPerPub as number, args.tag as string);
         break;
       case "get_post_comments":
         result = await client.getPostComments(args.domain as string, args.slug as string);
@@ -193,7 +216,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = await client.getPostCommentsByUrl(args.url as string);
         break;
       case "get_inbox":
-        result = await client.getInbox(args.limit as number);
+        result = await client.getInbox(args.limit as number, args.tag as string);
         break;
       case "get_notes_feed":
         result = await client.getNotesFeed(args.limit as number);
@@ -203,6 +226,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "get_recommendations":
         result = await client.getRecommendations(args.domain as string);
+        break;
+      case "tag_publication":
+        result = await client.tagPublication(args.domain as string, args.tags as string[]);
+        break;
+      case "list_tags":
+        result = await client.listTags();
         break;
       default:
         throw new Error(`Unknown tool: ${name}`);

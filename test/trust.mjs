@@ -1,8 +1,16 @@
 // Unit tests for the session-cookie trust boundary. Unlike test/run.mjs these stub
 // fetch, so they need no real token and make no network calls.
 import { strict as assert } from "assert";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { SubstackClient } from "../dist/client.js";
 import { untrusted } from "../dist/untrusted.js";
+
+// Isolate tag-store tests from the real ~/.substack-mcp/tags.json. tags.ts reads
+// SUBSTACK_MCP_TAGS_FILE lazily (per call, not at import time) precisely so this works.
+const tagsTestDir = mkdtempSync(join(tmpdir(), "substack-mcp-tags-test-"));
+process.env.SUBSTACK_MCP_TAGS_FILE = join(tagsTestDir, "tags.json");
 
 const SUBSCRIBED_CUSTOM_DOMAIN = "stratechery.com";
 
@@ -209,6 +217,70 @@ await test("get_inbox reports publication domain and unread state", async () => 
     },
   ]);
 });
+
+await test("tag_publication and list_tags round-trip", async () => {
+  const client = new SubstackClient("SECRET");
+  await client.tagPublication("hfbestideas.substack.com", ["Financial-Research", "financial-research", " macro "]);
+  const tags = await client.listTags();
+  // case-folded and deduped: "Financial-Research" and "financial-research" collapse to one
+  assert.deepEqual(tags, {
+    "financial-research": ["hfbestideas.substack.com"],
+    macro: ["hfbestideas.substack.com"],
+  });
+});
+
+await test("tag_publication with an empty array untags", async () => {
+  const client = new SubstackClient("SECRET");
+  await client.tagPublication("hfbestideas.substack.com", ["temp"]);
+  assert.deepEqual(await client.listTags(), { temp: ["hfbestideas.substack.com"] });
+  await client.tagPublication("hfbestideas.substack.com", []);
+  assert.deepEqual(await client.listTags(), {});
+});
+
+await test("search_all_subscriptions with a tag only searches tagged publications", async () => {
+  const client = new SubstackClient("SECRET");
+  await client.tagPublication("paid-pub.substack.com", ["finance"]);
+  // free-follow-pub deliberately left untagged
+  const seen = [];
+  stubFetch(seen, {
+    subsPubs: [{ id: 1, subdomain: "paid-pub" }],
+    inboxPubs: [{ id: 2, subdomain: "free-follow-pub" }],
+  });
+  await client.searchAllSubscriptions("query", 10, "finance");
+  const searched = seen.filter((s) => s.path === "/api/v1/archive").map((s) => s.host);
+  assert.deepEqual(searched, ["paid-pub.substack.com"]);
+});
+
+await test("get_inbox with a tag only returns posts from tagged publications", async () => {
+  const client = new SubstackClient("SECRET");
+  await client.tagPublication("somepub.substack.com", ["finance"]);
+  globalThis.fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.includes("/reader/posts")) {
+      return {
+        ok: true,
+        status: 200,
+        url: String(url),
+        json: async () => ({
+          publications: [
+            { id: 1, name: "Some Pub", subdomain: "somepub" },
+            { id: 2, name: "Other Pub", subdomain: "otherpub" },
+          ],
+          posts: [
+            { id: 1, publication_id: 1, title: "Tagged", post_date: "", audience: "everyone", canonical_url: "", max_read_progress: 0 },
+            { id: 2, publication_id: 2, title: "Untagged", post_date: "", audience: "everyone", canonical_url: "", max_read_progress: 0 },
+          ],
+        }),
+        text: async () => "",
+      };
+    }
+    throw new Error(`unexpected fetch: ${u.pathname}`);
+  };
+  const inbox = await client.getInbox(5, "finance");
+  assert.deepEqual(inbox.map((p) => p.title), ["Tagged"]);
+});
+
+rmSync(tagsTestDir, { recursive: true, force: true });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

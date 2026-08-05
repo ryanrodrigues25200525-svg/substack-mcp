@@ -1,5 +1,8 @@
 import { spawn } from "child_process";
 import { strict as assert } from "assert";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 const TOKEN = process.env.SUBSTACK_SESSION_TOKEN;
 if (!TOKEN) {
@@ -7,8 +10,11 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// Isolate tag_publication/list_tags from the real ~/.substack-mcp/tags.json.
+const tagsTestDir = mkdtempSync(join(tmpdir(), "substack-mcp-tags-test-"));
+
 const proc = spawn("node", ["dist/index.js"], {
-  env: { ...process.env, SUBSTACK_SESSION_TOKEN: TOKEN },
+  env: { ...process.env, SUBSTACK_SESSION_TOKEN: TOKEN, SUBSTACK_MCP_TAGS_FILE: join(tagsTestDir, "tags.json") },
 });
 
 let buf = "";
@@ -74,7 +80,7 @@ async function main() {
   });
   proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
-  await test("tools/list returns all 12 tools", async () => {
+  await test("tools/list returns all 14 tools", async () => {
     const res = await send("tools/list", {});
     const names = res.result.tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
@@ -88,8 +94,10 @@ async function main() {
       "get_recommendations",
       "list_published_posts",
       "list_subscriptions",
+      "list_tags",
       "search_all_subscriptions",
       "search_posts",
+      "tag_publication",
     ]);
   });
 
@@ -128,6 +136,39 @@ async function main() {
     assert.ok(data.length > 0);
     assert.ok(data[0].domain.endsWith(".substack.com"));
     assert.equal(typeof data[0].unread, "boolean");
+  });
+
+  await test("tag_publication, list_tags, and the tag filters work end to end", async () => {
+    // hfbestideas is in this account's inbox, so it's in the discoverPublications() union
+    // that search_all_subscriptions filters by tag — a domain the reader isn't actually
+    // subscribed/following to wouldn't be in that set, and the tag filter would silently
+    // return [] rather than prove anything.
+    const TAGGED_DOMAIN = "hfbestideas.substack.com";
+
+    const tagRes = await send("tools/call", {
+      name: "tag_publication",
+      arguments: { domain: TAGGED_DOMAIN, tags: ["financial-research"] },
+    });
+    assert.equal(!!tagRes.result.isError, false);
+
+    const listRes = await send("tools/call", { name: "list_tags", arguments: {} });
+    assert.deepEqual(parseContent(listRes), { "financial-research": [TAGGED_DOMAIN] });
+
+    const searchRes = await send("tools/call", {
+      name: "search_all_subscriptions",
+      arguments: { query: "the", limitPerPub: 3, tag: "financial-research" },
+    });
+    assert.equal(!!searchRes.result.isError, false);
+    const results = parseContent(searchRes);
+    assert.ok(results.length > 0, "expected at least one match from the tagged publication");
+    assert.ok(results.every((r) => r.publication_domain === TAGGED_DOMAIN));
+
+    const untagRes = await send("tools/call", {
+      name: "tag_publication",
+      arguments: { domain: TAGGED_DOMAIN, tags: [] },
+    });
+    assert.equal(!!untagRes.result.isError, false);
+    assert.deepEqual(parseContent(await send("tools/call", { name: "list_tags", arguments: {} })), {});
   });
 
   await test("search_all_subscriptions returns results across publications", async () => {
@@ -221,6 +262,7 @@ async function main() {
   });
 
   proc.kill();
+  rmSync(tagsTestDir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 }
@@ -228,5 +270,6 @@ async function main() {
 main().catch((e) => {
   console.error("FATAL:", e);
   proc.kill();
+  rmSync(tagsTestDir, { recursive: true, force: true });
   process.exit(1);
 });
