@@ -1,6 +1,6 @@
 {
   "name": "substack-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for reading Substack publications, posts, comments, and notes via a reader session token",
   "license": "MIT",
   "type": "module",
