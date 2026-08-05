@@ -9,7 +9,7 @@ const SUBSCRIBED_CUSTOM_DOMAIN = "stratechery.com";
 function stubFetch(seen, { redirectTo } = {}) {
   globalThis.fetch = async (url, opts = {}) => {
     const u = new URL(url);
-    seen.push({ host: u.hostname, cookie: !!(opts.headers && opts.headers.Cookie) });
+    seen.push({ host: u.hostname, path: u.pathname, cookie: !!(opts.headers && opts.headers.Cookie) });
     const body = u.pathname.includes("/subscriptions")
       ? { publications: [{ custom_domain: SUBSCRIBED_CUSTOM_DOMAIN, subdomain: "stratechery" }] }
       : [{ title: "t", slug: "s", post_date: "", audience: "", canonical_url: "" }];
@@ -88,6 +88,28 @@ await test("a malformed @handle is rejected before it becomes a hostname", async
   await assert.rejects(
     () => new SubstackClient("SECRET").resolveUrl("https://substack.com/@evil.com%2F../p-123"),
     /Invalid publication handle/
+  );
+});
+
+// Without escaping, a slug is a path — so get_post becomes a generic authenticated GET
+// against any endpoint on a host that does hold the session cookie.
+await test("a traversing slug cannot escape the posts path", async () => {
+  const seen = [];
+  stubFetch(seen);
+  await new SubstackClient("SECRET").getPost("lenny.substack.com", "../../../api/v1/settings");
+  assert.deepEqual(
+    seen.map((s) => s.path),
+    ["/api/v1/posts/..%2F..%2F..%2Fapi%2Fv1%2Fsettings"]
+  );
+});
+
+await test("an ordinary slug is left alone", async () => {
+  const seen = [];
+  stubFetch(seen);
+  await new SubstackClient("SECRET").getPost("lenny.substack.com", "my-post-title");
+  assert.deepEqual(
+    seen.map((s) => s.path),
+    ["/api/v1/posts/my-post-title"]
   );
 });
 

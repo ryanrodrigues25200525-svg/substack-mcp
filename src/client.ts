@@ -15,6 +15,36 @@ function normalizeDomain(domain: string): string {
   return domain.replace(/\/$/, "");
 }
 
+// Caller-supplied path segments come from an LLM whose context this server fills with
+// untrusted text. Unescaped, a slug like "../../../api/v1/settings" turns a post-reading
+// tool into a generic authenticated GET against any path on a trusted host.
+function seg(value: string | number): string {
+  return encodeURIComponent(String(value));
+}
+
+// ponytail: fixed pool. A reader with 200 subscriptions would otherwise fire 200
+// concurrent searches, get rate-limited, and retry each 3x with backoff.
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    })
+  );
+  return out;
+}
+
+// Error bodies land verbatim in the LLM's context. Substack answers a bad path with a
+// full HTML page, so cap it — it's both wasted context and attacker-authored text.
+async function errorBody(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  return text.length > 500 ? `${text.slice(0, 500)}… (${text.length} bytes truncated)` : text;
+}
+
 function clampLimit(limit: number | undefined, fallback: number): number {
   if (typeof limit !== "number" || Number.isNaN(limit)) return fallback;
   return Math.min(50, Math.max(1, Math.floor(limit))); // Substack's archive endpoint rejects limit > 50
@@ -144,11 +174,11 @@ export class SubstackClient {
             await sleep(backoffMs);
             continue;
           }
-          throw new Error(`Substack API error ${res.status} after ${MAX_RETRIES} retries: ${await res.text()}`);
+          throw new Error(`Substack API error ${res.status} after ${MAX_RETRIES} retries: ${await errorBody(res)}`);
         }
 
         if (!res.ok) {
-          throw new Error(`Substack API error ${res.status}: ${await res.text()}`);
+          throw new Error(`Substack API error ${res.status}: ${await errorBody(res)}`);
         }
 
         return res.json();
@@ -192,7 +222,7 @@ export class SubstackClient {
       }
       const guessDomain = `${handle}.substack.com`;
 
-      const res = await fetch(`https://${guessDomain}/api/v1/posts/by-id/${idMatch[1]}`, {
+      const res = await fetch(`https://${guessDomain}/api/v1/posts/by-id/${seg(idMatch[1])}`, {
         headers: await this.authHeaders(guessDomain),
       });
       if (!res.ok) throw new Error(`Could not resolve URL ${url}: ${res.status}`);
@@ -217,7 +247,7 @@ export class SubstackClient {
 
   // Fetch a single post's full content by slug, from a given publication domain
   async getPost(domain: string, slug: string) {
-    const post = await this.request(domain, `/api/v1/posts/${slug}`);
+    const post = await this.request(domain, `/api/v1/posts/${seg(slug)}`);
     return slimFullPost(post);
   }
 
@@ -237,17 +267,15 @@ export class SubstackClient {
   async searchAllSubscriptions(query: string, limitPerPub = 10) {
     const subs: any = await this.listSubscriptions();
     const publications: any[] = subs.publications ?? [];
-    const results = await Promise.all(
-      publications.map(async (pub) => {
-        const domain = `${pub.subdomain}.substack.com`;
-        try {
-          const posts = await this.searchPosts(domain, query, limitPerPub);
-          return posts.map((p) => slimArchivePost(p, domain));
-        } catch {
-          return []; // skip publications that error (custom domain mismatch, deleted pub, etc.)
-        }
-      })
-    );
+    const results = await mapPool(publications, 6, async (pub) => {
+      const domain = `${pub.subdomain}.substack.com`;
+      try {
+        const posts = await this.searchPosts(domain, query, limitPerPub);
+        return posts.map((p) => slimArchivePost(p, domain));
+      } catch {
+        return []; // skip publications that error (custom domain mismatch, deleted pub, etc.)
+      }
+    });
     return results.flat();
   }
 
@@ -259,8 +287,8 @@ export class SubstackClient {
   // Fetch comments on a post (by domain + slug). Looks up the post's internal id first,
   // since the comments endpoint is keyed by id rather than slug.
   async getPostComments(domain: string, slug: string) {
-    const post: any = await this.request(domain, `/api/v1/posts/${slug}`);
-    const comments: any = await this.request(domain, `/api/v1/post/${post.id}/comments`, { all_comments: "true" });
+    const post: any = await this.request(domain, `/api/v1/posts/${seg(slug)}`);
+    const comments: any = await this.request(domain, `/api/v1/post/${seg(post.id)}/comments`, { all_comments: "true" });
     return this.slimComments(comments.comments ?? comments);
   }
 
@@ -282,15 +310,15 @@ export class SubstackClient {
 
   // Fetch a Substack author's public profile by handle (bio, links, publications they write for)
   getAuthorProfile(handle: string) {
-    return this.request("https://substack.com", `/api/v1/user/${handle}/public_profile`);
+    return this.request("https://substack.com", `/api/v1/user/${seg(handle)}/public_profile`);
   }
 
   // List publications a given publication recommends to its readers
   async getRecommendations(domain: string) {
     const [recent] = await this.listPublished(domain, 0, 1);
     if (!recent) throw new Error(`Could not find any posts on ${domain} to resolve its publication id`);
-    const post: any = await this.request(domain, `/api/v1/posts/${recent.slug}`);
-    const recs: any[] = await this.request(domain, `/api/v1/recommendations/from/${post.publication_id}`);
+    const post: any = await this.request(domain, `/api/v1/posts/${seg(recent.slug)}`);
+    const recs: any[] = await this.request(domain, `/api/v1/recommendations/from/${seg(post.publication_id)}`);
     return recs.map((r) => ({
       name: r.recommendedPublication?.name,
       subdomain: r.recommendedPublication?.subdomain,
