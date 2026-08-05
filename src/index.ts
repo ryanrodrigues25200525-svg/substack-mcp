@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { SubstackClient } from "./client.js";
+import { untrusted } from "./untrusted.js";
 
 const SESSION_TOKEN = process.env.SUBSTACK_SESSION_TOKEN;
 
@@ -194,10 +195,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return { content: [{ type: "text", text: untrusted(JSON.stringify(result, null, 2)) }] };
   } catch (err) {
+    // Error text can carry a remote response body, so it gets the same treatment.
     return {
-      content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+      content: [{ type: "text", text: untrusted(`Error: ${err instanceof Error ? err.message : String(err)}`) }],
       isError: true,
     };
   }
