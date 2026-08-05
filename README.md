@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for reading Substack — public
 
 For use with Claude, Codex, and other MCP-compatible coding agents.
 
-It's read-only 🔒: nothing it does can post, like, comment, or change your account state.
+It's read-only 🔒: nothing it does can post, like, comment, or change your account state. The session cookie is only ever sent to Substack hosts you're actually subscribed to, and tool output is wrapped in a delimited block marking it as untrusted third-party content (post bodies and comments are written by other people, not you) — both defenses against prompt injection carried in what you read.
 
 ## 🛠️ Tools
 
@@ -14,8 +14,9 @@ It's read-only 🔒: nothing it does can post, like, comment, or change your acc
 | `get_post` | Get a post's full content by domain + slug (works on paywalled posts if you're a paid subscriber) |
 | `get_post_by_url` | Get a post's full content from any post URL, including generic `substack.com/@handle/p-<id>` links |
 | `search_posts` | Search posts within a publication |
-| `search_all_subscriptions` | Search across every publication you're subscribed to |
+| `search_all_subscriptions` | Search across every publication you're subscribed to or follow |
 | `list_subscriptions` | List your subscriptions (free and paid) |
+| `get_inbox` | New posts across every publication you read, newest first, with read/unread state |
 | `get_post_comments` | Get a post's comments, with nested replies, by domain + slug |
 | `get_post_comments_by_url` | Same, from any post URL |
 | `get_author_profile` | Get an author's public profile (bio, social links, publications they write for) |
@@ -70,10 +71,11 @@ Add to your MCP client's config (e.g. Claude Code's `~/.claude.json`, under `mcp
 
 ```bash
 npm run build               # compile TypeScript
-SUBSTACK_SESSION_TOKEN=xxx npm test   # run the integration test suite against live Substack endpoints
+SUBSTACK_SESSION_TOKEN=xxx npm test   # integration suite against live Substack endpoints
+npm run test:trust           # unit tests for the session-cookie trust boundary (stubbed, no token needed)
 ```
 
-The test suite makes real requests against live publications, so it needs a valid `SUBSTACK_SESSION_TOKEN` and is subject to Substack's rate limits.
+`npm test` makes real requests against live publications, so it needs a valid `SUBSTACK_SESSION_TOKEN` and is subject to Substack's rate limits. `npm run test:trust` stubs `fetch` and covers which hosts get the session cookie, path escaping, and the untrusted-content envelope — no network, no token.
 
 ## 📄 License
 

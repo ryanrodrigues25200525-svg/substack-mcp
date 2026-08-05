@@ -42,6 +42,18 @@ function send(method, params) {
 let passed = 0;
 let failed = 0;
 
+// Tool output comes back wrapped in <substack-content-NONCE> ... </substack-content-NONCE>
+// (see src/untrusted.ts) so the model can tell it apart from instructions. Strip that here
+// to get at the JSON payload underneath.
+function parseContent(res) {
+  const text = res.result.content[0].text;
+  const open = text.match(/^<substack-content-([0-9a-f]+)>\n/);
+  if (!open) throw new Error(`Tool output missing the untrusted-content envelope: ${text.slice(0, 80)}`);
+  const bodyStart = text.indexOf("\n\n", open[0].length) + 2;
+  const bodyEnd = text.lastIndexOf(`</substack-content-${open[1]}>`);
+  return JSON.parse(text.slice(bodyStart, bodyEnd).replace(/\n$/, ""));
+}
+
 async function test(name, fn) {
   try {
     await fn();
@@ -62,11 +74,12 @@ async function main() {
   });
   proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
-  await test("tools/list returns all 11 tools", async () => {
+  await test("tools/list returns all 12 tools", async () => {
     const res = await send("tools/list", {});
     const names = res.result.tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "get_author_profile",
+      "get_inbox",
       "get_notes_feed",
       "get_post",
       "get_post_by_url",
@@ -83,7 +96,7 @@ async function main() {
   await test("list_subscriptions returns real data", async () => {
     const res = await send("tools/call", { name: "list_subscriptions", arguments: {} });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(Array.isArray(data.publications));
   });
 
@@ -93,7 +106,7 @@ async function main() {
       arguments: { domain: "citrini.substack.com", slug: "macro-memo-spin-cycle" },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(data.body_html.length > 0);
   });
 
@@ -103,8 +116,18 @@ async function main() {
       arguments: { url: "https://substack.com/@aurelionresearch/p-199927616" },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(data.title.length > 0);
+  });
+
+  await test("get_inbox returns posts with domain and read state", async () => {
+    const res = await send("tools/call", { name: "get_inbox", arguments: { limit: 5 } });
+    assert.equal(!!res.result.isError, false);
+    const data = parseContent(res);
+    assert.ok(Array.isArray(data));
+    assert.ok(data.length > 0);
+    assert.ok(data[0].domain.endsWith(".substack.com"));
+    assert.equal(typeof data[0].unread, "boolean");
   });
 
   await test("search_all_subscriptions returns results across publications", async () => {
@@ -113,7 +136,7 @@ async function main() {
       arguments: { query: "oil", limitPerPub: 3 },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(Array.isArray(data));
   });
 
@@ -150,14 +173,14 @@ async function main() {
       arguments: { domain: "citrini.substack.com", slug: "macro-memo-spin-cycle" },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(Array.isArray(data));
   });
 
   await test("get_notes_feed returns recent notes", async () => {
     const res = await send("tools/call", { name: "get_notes_feed", arguments: { limit: 5 } });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(Array.isArray(data));
   });
 
@@ -167,7 +190,7 @@ async function main() {
       arguments: { handle: "quantitativo" },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(data.name.length > 0);
   });
 
@@ -185,7 +208,7 @@ async function main() {
       arguments: { domain: "citrini.substack.com" },
     });
     assert.equal(!!res.result.isError, false);
-    const data = JSON.parse(res.result.content[0].text);
+    const data = parseContent(res);
     assert.ok(Array.isArray(data));
   });
 
