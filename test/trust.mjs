@@ -7,13 +7,20 @@ import { untrusted } from "../dist/untrusted.js";
 const SUBSCRIBED_CUSTOM_DOMAIN = "stratechery.com";
 
 // Records every outbound request so a test can assert who got the Cookie header.
-function stubFetch(seen, { redirectTo } = {}) {
+// subsPubs / inboxPubs let a test control what listSubscriptions() and getInbox() see,
+// independently — that's the seam the coverage-union tests exercise.
+function stubFetch(seen, { redirectTo, subsPubs, inboxPubs } = {}) {
   globalThis.fetch = async (url, opts = {}) => {
     const u = new URL(url);
-    seen.push({ host: u.hostname, path: u.pathname, cookie: !!(opts.headers && opts.headers.Cookie) });
-    const body = u.pathname.includes("/subscriptions")
-      ? { publications: [{ custom_domain: SUBSCRIBED_CUSTOM_DOMAIN, subdomain: "stratechery" }] }
-      : [{ title: "t", slug: "s", post_date: "", audience: "", canonical_url: "" }];
+    seen.push({ host: u.hostname, path: u.pathname, search: u.search, cookie: !!(opts.headers && opts.headers.Cookie) });
+    let body;
+    if (u.pathname.includes("/subscriptions")) {
+      body = { publications: subsPubs ?? [{ id: 1, custom_domain: SUBSCRIBED_CUSTOM_DOMAIN, subdomain: "stratechery" }] };
+    } else if (u.pathname.includes("/reader/posts")) {
+      body = { posts: [], publications: inboxPubs ?? [] };
+    } else {
+      body = [{ title: "t", slug: "s", post_date: "", audience: "", canonical_url: "" }];
+    }
     return {
       ok: true,
       status: 200,
@@ -127,6 +134,80 @@ await test("a post body cannot close the untrusted-content block early", async (
   assert.equal(out.split(closing).length - 1, 1);
   assert.ok(out.indexOf(closing) > out.indexOf(attack));
   assert.ok(!attack.includes(closing));
+});
+
+// /api/v1/reader/posts 400s above limit=20, unlike /archive's 50 — caught live when
+// discoverPublications asked it for 50 and the whole call silently degraded to "no inbox
+// publications" via the catch. Pin the ceiling so that regresses loudly instead.
+await test("get_inbox never requests more than reader/posts' limit of 20", async () => {
+  const seen = [];
+  stubFetch(seen, { inboxPubs: [] });
+  await new SubstackClient("SECRET").getInbox(50);
+  const call = seen.find((s) => s.path === "/api/v1/reader/posts");
+  const requested = Number(new URLSearchParams(call.search).get("limit"));
+  assert.ok(requested <= 20, `requested limit=${requested}, reader/posts rejects > 20`);
+});
+
+// /api/v1/subscriptions only lists paid/explicit subscriptions — a reader's free follows
+// still deliver posts to the inbox without appearing there. search_all_subscriptions used
+// to search only what listSubscriptions() saw; it now unions both sources.
+await test("search_all_subscriptions covers publications only visible in the inbox", async () => {
+  const seen = [];
+  stubFetch(seen, {
+    subsPubs: [{ id: 1, subdomain: "paid-pub" }],
+    inboxPubs: [{ id: 2, subdomain: "free-follow-pub" }],
+  });
+  await new SubstackClient("SECRET").searchAllSubscriptions("query");
+  const searched = seen.filter((s) => s.path === "/api/v1/archive").map((s) => s.host);
+  assert.ok(searched.includes("paid-pub.substack.com"));
+  assert.ok(searched.includes("free-follow-pub.substack.com"));
+});
+
+await test("get_inbox reports publication domain and unread state", async () => {
+  const seen = [];
+  stubFetch(seen, {
+    inboxPubs: [{ id: 42, name: "Some Pub", subdomain: "somepub" }],
+  });
+  globalThis.fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.includes("/reader/posts")) {
+      return {
+        ok: true,
+        status: 200,
+        url: String(url),
+        json: async () => ({
+          publications: [{ id: 42, name: "Some Pub", subdomain: "somepub" }],
+          posts: [
+            {
+              id: 1,
+              publication_id: 42,
+              title: "A post",
+              post_date: "2026-08-05T00:00:00Z",
+              audience: "everyone",
+              canonical_url: "https://somepub.substack.com/p/a-post",
+              max_read_progress: 0,
+            },
+          ],
+        }),
+        text: async () => "",
+      };
+    }
+    throw new Error(`unexpected fetch: ${u.pathname}`);
+  };
+  const inbox = await new SubstackClient("SECRET").getInbox(5);
+  assert.deepEqual(inbox, [
+    {
+      title: "A post",
+      subtitle: undefined,
+      publication: "Some Pub",
+      domain: "somepub.substack.com",
+      post_date: "2026-08-05T00:00:00Z",
+      audience: "everyone",
+      canonical_url: "https://somepub.substack.com/p/a-post",
+      wordcount: undefined,
+      unread: true,
+    },
+  ]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

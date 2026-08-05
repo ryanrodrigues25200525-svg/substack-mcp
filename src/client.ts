@@ -50,6 +50,10 @@ function clampLimit(limit: number | undefined, fallback: number): number {
   return Math.min(50, Math.max(1, Math.floor(limit))); // Substack's archive endpoint rejects limit > 50
 }
 
+// /api/v1/reader/posts rejects limit > 20, unlike /archive's 50 — a narrower cap than
+// clampLimit's default, so it needs its own ceiling rather than reusing that one.
+const READER_POSTS_MAX_LIMIT = 20;
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -263,10 +267,24 @@ export class SubstackClient {
     return (posts as any[]).map((p) => slimArchivePost(p));
   }
 
-  // Search across every publication the reader is subscribed to
+  // /api/v1/subscriptions under-reports: it only lists paid/explicit subscriptions, not
+  // every publication the reader actually gets posts from (free follows still show up in
+  // the inbox but not here). Union both sources so "every publication" means what it says.
+  private async discoverPublications(): Promise<Map<number, { subdomain: string }>> {
+    const [subs, inbox]: [any, any] = await Promise.all([
+      this.listSubscriptions().catch(() => ({ publications: [] })),
+      this.getInboxRaw(READER_POSTS_MAX_LIMIT).catch(() => ({ publications: [] })),
+    ]);
+    const byId = new Map<number, { subdomain: string }>();
+    for (const pub of [...(subs.publications ?? []), ...(inbox.publications ?? [])]) {
+      if (pub?.id != null && pub?.subdomain) byId.set(pub.id, { subdomain: pub.subdomain });
+    }
+    return byId;
+  }
+
+  // Search across every publication the reader is subscribed to or follows
   async searchAllSubscriptions(query: string, limitPerPub = 10) {
-    const subs: any = await this.listSubscriptions();
-    const publications: any[] = subs.publications ?? [];
+    const publications = [...(await this.discoverPublications()).values()];
     const results = await mapPool(publications, 6, async (pub) => {
       const domain = `${pub.subdomain}.substack.com`;
       try {
@@ -282,6 +300,38 @@ export class SubstackClient {
   // List the reader's own subscriptions (publications they follow/pay for)
   listSubscriptions() {
     return this.request("https://substack.com", "/api/v1/subscriptions", { tvOnly: "false" });
+  }
+
+  private getInboxRaw(limit: number) {
+    return this.request("https://substack.com", "/api/v1/reader/posts", {
+      limit: Math.min(READER_POSTS_MAX_LIMIT, clampLimit(limit, 20)),
+    });
+  }
+
+  // A single chronological feed of new posts across every publication the reader
+  // actually receives posts from — wider coverage than listSubscriptions (see
+  // discoverPublications) and includes each post's read state.
+  //
+  // ponytail: the API returns a "more" flag but every offset/cursor/page param tried
+  // against it came back with the same first page, so only that page is reachable here.
+  async getInbox(limit = 20) {
+    const feed: any = await this.getInboxRaw(limit);
+    const pubs = new Map<number, any>((feed.publications ?? []).map((p: any) => [p.id, p]));
+    const posts: any[] = feed.posts ?? [];
+    return posts.map((p) => {
+      const pub = pubs.get(p.publication_id);
+      return {
+        title: p.title,
+        subtitle: p.subtitle,
+        publication: pub?.name,
+        domain: pub?.subdomain ? `${pub.subdomain}.substack.com` : undefined,
+        post_date: p.post_date,
+        audience: p.audience,
+        canonical_url: p.canonical_url,
+        wordcount: p.wordcount,
+        unread: !p.max_read_progress,
+      };
+    });
   }
 
   // Fetch comments on a post (by domain + slug). Looks up the post's internal id first,

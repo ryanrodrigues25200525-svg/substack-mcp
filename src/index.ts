@@ -118,6 +118,14 @@ const TOOLS = [
     },
   },
   {
+    name: "get_inbox",
+    description: "List new posts across every publication you're subscribed to or follow, newest first, with read/unread state. Wider coverage than list_subscriptions + list_published_posts per pub, and one call instead of many.",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "number", default: 20 } },
+    },
+  },
+  {
     name: "get_notes_feed",
     description: "List recent items from your Substack Notes home feed (short-form posts from people/publications you follow)",
     inputSchema: {
@@ -146,6 +154,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       search_all_subscriptions: ["query"],
       get_post_comments: ["domain", "slug"],
       get_post_comments_by_url: ["url"],
+      get_inbox: [],
       get_notes_feed: [],
       get_author_profile: ["handle"],
       get_recommendations: ["domain"],
@@ -182,6 +191,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "get_post_comments_by_url":
         result = await client.getPostCommentsByUrl(args.url as string);
+        break;
+      case "get_inbox":
+        result = await client.getInbox(args.limit as number);
         break;
       case "get_notes_feed":
         result = await client.getNotesFeed(args.limit as number);
